@@ -1,0 +1,26 @@
+Case_ID,Person_ID,Case_Type,Priority,Status
+CASE001,P001,Financial Investigation,High,Open
+CASE002,P002,Communication Analysis,Medium,Open
+CASE003,P003,Financial Investigation,High,Under Review
+CASE004,P004,Network Investigation,High,Open
+CASE005,P005,Financial Investigation,Medium,Closed
+CASE006,P006,Communication Analysis,Low,Under Review
+CASE007,P007,Network Investigation,High,Open
+CASE008,P008,Entity Investigation,Medium,Open
+CASE009,P009,Financial Investigation,High,Under Review
+CASE010,P010,Communication Analysis,Low,Closed
+CASE011,P011,Network Investigation,Medium,Open
+CASE012,P012,Financial Investigation,High,Open
+CASE013,P013,Entity Investigation,Low,Closed
+CASE014,P014,Network Investigation,Medium,Under Review
+CASE015,P015,Financial Investigation,High,Open
+CASE016,P016,Communication Analysis,Medium,Open
+CASE017,P017,Network Investigation,Low,Closed
+CASE018,P018,Entity Investigation,Medium,Under Review
+CASE019,P019,Financial Investigation,High,Open
+CASE020,P020,Network Investigation,Medium,Open
+CASE021,P021,Financial Investigation,High,Open
+CASE022,P022,Communication Analysis,Medium,Under Review
+CASE023,P023,Network Investigation,High,Open
+CASE024,P024,Entity Investigation,Low,Closed
+CASE025,P025,Financial Investigation,High,Open
