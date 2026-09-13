@@ -1,1042 +1,1249 @@
-# ============================================================
-# CRIMEGRAPH AI
-# ALERTS & ANOMALY DETECTION
-# ============================================================
-
 import streamlit as st
 import pandas as pd
-import networkx as nx
-import os
+from pathlib import Path
+from itertools import combinations
 
 
 # ============================================================
-# PAGE CONFIG
+# DATA FOLDER
 # ============================================================
 
-st.set_page_config(
-    page_title="CrimeGraph AI - Alerts",
-    page_icon="🚨",
-    layout="wide"
-)
-
-
-# ============================================================
-# PROJECT PATH
-# ============================================================
-
-BASE_DIR = os.path.abspath(
-    os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        ".."
-    )
-)
-
-DATA_DIR = os.path.join(
-    BASE_DIR,
-    "data"
-)
-
-
-# ============================================================
-# LOAD DATA
-# ============================================================
-
-@st.cache_data
-def load_data():
-
-    persons = pd.read_csv(
-        os.path.join(
-            DATA_DIR,
-            "persons.csv"
-        )
-    )
-
-    calls = pd.read_csv(
-        os.path.join(
-            DATA_DIR,
-            "calls.csv"
-        )
-    )
-
-    transactions = pd.read_csv(
-        os.path.join(
-            DATA_DIR,
-            "transactions.csv"
-        )
-    )
-
-    cases = pd.read_csv(
-        os.path.join(
-            DATA_DIR,
-            "cases.csv"
-        )
-    )
-
-    return (
-        persons,
-        calls,
-        transactions,
-        cases
-    )
-
-
-# ============================================================
-# LOAD DATA SAFELY
-# ============================================================
-
-try:
-
-    persons, calls, transactions, cases = load_data()
-
-except Exception as e:
-
-    st.error(
-        "Unable to load data."
-    )
-
-    st.code(
-        str(e)
-    )
-
-    st.stop()
-
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.title(
-    "🚨 Alerts & Anomaly Detection"
-)
-
-st.markdown(
-    """
-    ### Automated Investigation Alerts
-
-    This module examines communication, financial and network
-    patterns and highlights records that may deserve additional
-    human review.
-
-    **Important:** An alert is only an indicator. It does not
-    establish criminal activity or guilt.
-    """
-)
-
-st.divider()
-
-
-# ============================================================
-# CREATE NETWORK
-# ============================================================
-
-G = nx.Graph()
-
-
-# ============================================================
-# ADD PERSONS
-# ============================================================
-
-for _, row in persons.iterrows():
-
-    person_id = str(
-        row["Person_ID"]
-    )
-
-    name = str(
-        row.get(
-            "Name",
-            person_id
-        )
-    )
-
-    G.add_node(
-        person_id,
-        name=name
-    )
-
-
-# ============================================================
-# ADD CALL CONNECTIONS
-# ============================================================
-
-for _, row in calls.iterrows():
-
-    caller = str(
-        row["Caller"]
-    )
-
-    receiver = str(
-        row["Receiver"]
-    )
-
-    if (
-        caller in G.nodes
-        and
-        receiver in G.nodes
-    ):
-
-        if G.has_edge(
-            caller,
-            receiver
-        ):
-
-            G[caller][receiver][
-                "calls"
-            ] += 1
-
-        else:
-
-            G.add_edge(
-                caller,
-                receiver,
-                calls=1,
-                transactions=0,
-                amount=0
-            )
-
-
-# ============================================================
-# ADD TRANSACTION CONNECTIONS
-# ============================================================
-
-for _, row in transactions.iterrows():
-
-    sender = str(
-        row["Sender"]
-    )
-
-    receiver = str(
-        row["Receiver"]
-    )
-
-    try:
-
-        amount = float(
-            row["Amount"]
-        )
-
-    except:
-
-        amount = 0
-
-
-    if (
-        sender in G.nodes
-        and
-        receiver in G.nodes
-    ):
-
-        if G.has_edge(
-            sender,
-            receiver
-        ):
-
-            G[sender][receiver][
-                "transactions"
-            ] += 1
-
-            G[sender][receiver][
-                "amount"
-            ] += amount
-
-        else:
-
-            G.add_edge(
-                sender,
-                receiver,
-                calls=0,
-                transactions=1,
-                amount=amount
-            )
-
-
-# ============================================================
-# ALERT COUNTERS
-# ============================================================
-
-repeated_call_alerts = 0
-
-financial_alerts = 0
-
-high_connection_alerts = 0
-
-rapid_transaction_alerts = 0
-
-total_alerts = 0
-
-
-# ============================================================
-# ALERT 1
-# REPEATED COMMUNICATION
-# ============================================================
-
-st.subheader(
-    "📞 1. Repeated Communication"
-)
-
-st.write(
-    """
-    Detects person-to-person communication links that occur
-    repeatedly.
-    """
-)
-
-
-if len(calls) > 0:
-
-    call_counts = (
-        calls
-        .groupby(
-            [
-                "Caller",
-                "Receiver"
-            ]
-        )
-        .size()
-        .reset_index(
-            name="Call Count"
-        )
-        .sort_values(
-            by="Call Count",
-            ascending=False
-        )
-    )
-
-    repeated_calls = call_counts[
-        call_counts["Call Count"] >= 3
+def get_data_folder():
+
+    current_file = Path(__file__).resolve()
+
+    possible_paths = [
+        current_file.parents[2] / "data",
+        current_file.parents[1] / "data",
+        Path.cwd() / "data",
+        Path.cwd().parent / "data"
     ]
 
+    for path in possible_paths:
+        if path.exists() and path.is_dir():
+            return path
 
-    repeated_call_alerts = len(
-        repeated_calls
-    )
+    return None
 
 
-    if repeated_call_alerts > 0:
+# ============================================================
+# SAFE CSV READER
+# ============================================================
 
-        st.warning(
-            f"{repeated_call_alerts} repeated communication "
-            "pattern(s) detected."
+def read_csv(path):
+
+    if not path.exists():
+        return pd.DataFrame()
+
+    try:
+        if path.stat().st_size == 0:
+            return pd.DataFrame()
+
+        return pd.read_csv(
+            path,
+            dtype=str,
+            encoding="utf-8-sig"
+        ).fillna("")
+
+    except Exception:
+        return pd.DataFrame()
+
+
+# ============================================================
+# FIND COLUMN
+# ============================================================
+
+def find_column(df, names):
+
+    if df.empty:
+        return None
+
+    normalized = {
+        str(col).strip().lower(): col
+        for col in df.columns
+    }
+
+    for name in names:
+
+        key = name.strip().lower()
+
+        if key in normalized:
+            return normalized[key]
+
+    return None
+
+
+# ============================================================
+# MAIN PAGE FUNCTION
+# ============================================================
+
+def show():
+
+    # ========================================================
+    # LOAD DATA
+    # ========================================================
+
+    data_folder = get_data_folder()
+
+    if data_folder is None:
+
+        st.error("❌ Data folder not found.")
+
+        st.info(
+            "Make sure the data folder exists inside SIH_FINAL."
         )
 
-        st.dataframe(
-            repeated_calls,
-            use_container_width=True,
-            hide_index=True
+        return
+
+    persons = read_csv(
+        data_folder / "persons.csv"
+    )
+
+    calls = read_csv(
+        data_folder / "calls.csv"
+    )
+
+    transactions = read_csv(
+        data_folder / "transactions.csv"
+    )
+
+    cases = read_csv(
+        data_folder / "cases.csv"
+    )
+
+    phones = read_csv(
+        data_folder / "phones.csv"
+    )
+
+    vehicles = read_csv(
+        data_folder / "vehicles.csv"
+    )
+
+    locations = read_csv(
+        data_folder / "locations.csv"
+    )
+
+    # ========================================================
+    # TITLE
+    # ========================================================
+
+    st.title("🚨 Alerts & Anomaly Detection")
+
+    st.markdown(
+        "### Automated Investigation Alerts"
+    )
+
+    st.write(
+        "This module examines communication, financial and "
+        "network patterns and highlights records that may "
+        "deserve additional human review."
+    )
+
+    st.info(
+        "Important: An alert is only an indicator. "
+        "It does not establish criminal activity or guilt."
+    )
+
+    # ========================================================
+    # DATA STATUS
+    # ========================================================
+
+    with st.expander("📂 Data Status"):
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        with c1:
+            st.metric("Persons", len(persons))
+
+        with c2:
+            st.metric("Calls", len(calls))
+
+        with c3:
+            st.metric("Transactions", len(transactions))
+
+        with c4:
+            st.metric("Cases", len(cases))
+
+    # ========================================================
+    # TOTAL ALERTS
+    # ========================================================
+
+    total_alerts = 0
+
+    # ========================================================
+    # 1. REPEATED COMMUNICATION
+    # ========================================================
+
+    st.markdown("### 📞 1. Repeated Communication")
+
+    st.caption(
+        "Detects person-to-person communication links "
+        "that occur repeatedly."
+    )
+
+    if calls.empty:
+
+        st.warning("No call data available.")
+
+    else:
+
+        caller_col = find_column(
+            calls,
+            [
+                "caller",
+                "caller_id",
+                "source",
+                "from",
+                "sender"
+            ]
+        )
+
+        receiver_col = find_column(
+            calls,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to",
+                "recipient"
+            ]
+        )
+
+        if caller_col and receiver_col:
+
+            repeated_calls = (
+                calls
+                .groupby(
+                    [caller_col, receiver_col]
+                )
+                .size()
+                .reset_index(
+                    name="Number of Calls"
+                )
+            )
+
+            repeated_calls = repeated_calls[
+                repeated_calls["Number of Calls"] >= 2
+            ]
+
+            if not repeated_calls.empty:
+
+                total_alerts += len(
+                    repeated_calls
+                )
+
+                st.warning(
+                    f"🚨 {len(repeated_calls)} repeated "
+                    "communication relationship(s) detected."
+                )
+
+                st.dataframe(
+                    repeated_calls.sort_values(
+                        "Number of Calls",
+                        ascending=False
+                    ),
+                    width="stretch",
+                    hide_index=True
+                )
+
+            else:
+
+                st.success(
+                    "No repeated communication pattern detected."
+                )
+
+        else:
+
+            st.error(
+                "Caller/Receiver columns not found."
+            )
+
+    # ========================================================
+    # 2. HIGH-VALUE TRANSACTIONS
+    # ========================================================
+
+    st.markdown(
+        "### 💰 2. High-Value Transactions"
+    )
+
+    st.caption(
+        "Flags transactions of ₹50,000 or more "
+        "for additional review."
+    )
+
+    if transactions.empty:
+
+        st.warning(
+            "No transaction data available."
         )
 
     else:
 
-        st.success(
-            "No repeated communication pattern detected."
+        amount_col = find_column(
+            transactions,
+            [
+                "amount",
+                "transaction_amount",
+                "value"
+            ]
         )
 
-else:
+        sender_col = find_column(
+            transactions,
+            [
+                "sender",
+                "sender_id",
+                "source",
+                "from"
+            ]
+        )
 
-    st.info(
-        "No call data available."
+        receiver_col = find_column(
+            transactions,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to"
+            ]
+        )
+
+        transaction_id_col = find_column(
+            transactions,
+            [
+                "transaction_id",
+                "id"
+            ]
+        )
+
+        if amount_col:
+
+            transactions[amount_col] = pd.to_numeric(
+                transactions[amount_col],
+                errors="coerce"
+            )
+
+            transactions = transactions.dropna(
+                subset=[amount_col]
+            )
+
+            threshold = 50000
+
+            if not transactions.empty:
+
+                average_transaction = (
+                    transactions[amount_col].mean()
+                )
+
+                high_value = transactions[
+                    transactions[amount_col] >= threshold
+                ].copy()
+
+                c1, c2, c3 = st.columns(3)
+
+                with c1:
+
+                    st.metric(
+                        "Average Transaction",
+                        f"₹{average_transaction:,.2f}"
+                    )
+
+                with c2:
+
+                    st.metric(
+                        "Alert Threshold",
+                        f"₹{threshold:,.2f}"
+                    )
+
+                with c3:
+
+                    st.metric(
+                        "High-Value Alerts",
+                        len(high_value)
+                    )
+
+                if not high_value.empty:
+
+                    total_alerts += len(
+                        high_value
+                    )
+
+                    st.warning(
+                        f"🚨 {len(high_value)} high-value "
+                        "transaction(s) detected."
+                    )
+
+                    display_columns = []
+
+                    for col in [
+                        transaction_id_col,
+                        sender_col,
+                        receiver_col,
+                        amount_col,
+                        "Date",
+                        "date",
+                        "Type",
+                        "type"
+                    ]:
+
+                        if (
+                            col
+                            and col in high_value.columns
+                            and col not in display_columns
+                        ):
+
+                            display_columns.append(col)
+
+                    if display_columns:
+
+                        st.dataframe(
+                            high_value[
+                                display_columns
+                            ],
+                            width="stretch",
+                            hide_index=True
+                        )
+
+                    else:
+
+                        st.dataframe(
+                            high_value,
+                            width="stretch",
+                            hide_index=True
+                        )
+
+                else:
+
+                    st.success(
+                        "No high-value transaction detected."
+                    )
+
+            else:
+
+                st.warning(
+                    "No valid numeric transaction amounts found."
+                )
+
+        else:
+
+            st.error(
+                "Amount column not found."
+            )
+
+    # ========================================================
+    # 3. HIGHLY CONNECTED ENTITIES
+    # ========================================================
+
+    st.markdown(
+        "### 🕸️ 3. Highly Connected Entities"
     )
 
-
-st.divider()
-
-
-# ============================================================
-# ALERT 2
-# HIGH VALUE TRANSACTIONS
-# ============================================================
-
-st.subheader(
-    "💰 2. High-Value Transactions"
-)
-
-st.write(
-    """
-    Flags transactions significantly higher than the average
-    transaction value in the dataset.
-    """
-)
-
-
-if len(transactions) > 0:
-
-    transaction_amounts = pd.to_numeric(
-        transactions["Amount"],
-        errors="coerce"
-    ).fillna(0)
-
-
-    average_amount = (
-        transaction_amounts.mean()
+    st.caption(
+        "Identifies people with unusually high numbers "
+        "of direct network connections."
     )
 
-    threshold = (
-        average_amount * 2
-    )
+    connection_counts = {}
 
+    def add_person_connection(a, b):
 
-    high_value_transactions = transactions[
-        transaction_amounts >= threshold
-    ].copy()
+        if not a or not b:
+            return
 
+        a = str(a).strip()
+        b = str(b).strip()
 
-    financial_alerts = len(
-        high_value_transactions
-    )
+        if not a or not b or a == b:
+            return
 
-
-    col1, col2 = st.columns(2)
-
-
-    with col1:
-
-        st.metric(
-            "Average Transaction",
-            f"₹{average_amount:,.2f}"
+        connection_counts.setdefault(
+            a,
+            set()
         )
 
-
-    with col2:
-
-        st.metric(
-            "Alert Threshold",
-            f"₹{threshold:,.2f}"
+        connection_counts.setdefault(
+            b,
+            set()
         )
 
+        connection_counts[a].add(b)
+        connection_counts[b].add(a)
 
-    if financial_alerts > 0:
+    # ========================================================
+    # CALL CONNECTIONS
+    # ========================================================
 
-        st.warning(
-            f"{financial_alerts} high-value transaction(s) detected."
+    if not calls.empty:
+
+        caller_col = find_column(
+            calls,
+            [
+                "caller",
+                "caller_id",
+                "source",
+                "from"
+            ]
         )
 
-        st.dataframe(
-            high_value_transactions,
-            use_container_width=True,
-            hide_index=True
+        receiver_col = find_column(
+            calls,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to"
+            ]
         )
 
-    else:
+        if caller_col and receiver_col:
 
-        st.success(
-            "No high-value transaction detected."
+            for _, row in calls.iterrows():
+
+                add_person_connection(
+                    row[caller_col],
+                    row[receiver_col]
+                )
+
+    # ========================================================
+    # TRANSACTION CONNECTIONS
+    # ========================================================
+
+    if not transactions.empty:
+
+        sender_col = find_column(
+            transactions,
+            [
+                "sender",
+                "sender_id",
+                "source",
+                "from"
+            ]
         )
 
-else:
-
-    st.info(
-        "No transaction data available."
-    )
-
-
-st.divider()
-
-
-# ============================================================
-# ALERT 3
-# HIGHLY CONNECTED ENTITIES
-# ============================================================
-
-st.subheader(
-    "🕸️ 3. Highly Connected Entities"
-)
-
-st.write(
-    """
-    Identifies entities with unusually high numbers of
-    direct network connections.
-    """
-)
-
-
-if G.number_of_nodes() > 0:
-
-    degrees = dict(
-        G.degree()
-    )
-
-
-    degree_df = pd.DataFrame(
-        [
-            {
-                "Person ID": node,
-
-                "Name": G.nodes[node].get(
-                    "name",
-                    node
-                ),
-
-                "Connections": degree
-            }
-
-            for node, degree
-            in degrees.items()
-        ]
-    )
-
-
-    if len(degree_df) > 0:
-
-        average_degree = (
-            degree_df["Connections"]
-            .mean()
+        receiver_col = find_column(
+            transactions,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to"
+            ]
         )
 
-        degree_threshold = max(
-            3,
-            average_degree * 2
+        if sender_col and receiver_col:
+
+            for _, row in transactions.iterrows():
+
+                add_person_connection(
+                    row[sender_col],
+                    row[receiver_col]
+                )
+
+    if connection_counts:
+
+        connected_entities = []
+
+        for person, connections in connection_counts.items():
+
+            connected_entities.append(
+                {
+                    "Person": person,
+                    "Direct Connections": len(
+                        connections
+                    )
+                }
+            )
+
+        connected_df = pd.DataFrame(
+            connected_entities
         )
 
-
-        highly_connected = degree_df[
-            degree_df["Connections"]
-            >= degree_threshold
-        ].sort_values(
-            by="Connections",
+        connected_df = connected_df.sort_values(
+            "Direct Connections",
             ascending=False
         )
 
+        top_connected = connected_df.head(5)
 
-        high_connection_alerts = len(
-            highly_connected
-        )
+        if not top_connected.empty:
 
-
-        if high_connection_alerts > 0:
+            total_alerts += len(
+                top_connected
+            )
 
             st.warning(
-                f"{high_connection_alerts} highly connected "
-                "entity/entities detected."
+                "🔥 Most connected entities:"
             )
 
             st.dataframe(
-                highly_connected,
-                use_container_width=True,
+                top_connected,
+                width="stretch",
+                hide_index=True
+            )
+
+    else:
+
+        st.info(
+            "No network connections available."
+        )
+
+    # ========================================================
+    # 4. REPEATED FINANCIAL RELATIONSHIPS
+    # ========================================================
+
+    st.markdown(
+        "### 🔄 4. Repeated Financial Relationships"
+    )
+
+    st.caption(
+        "Detects repeated money transfers between "
+        "the same sender and receiver."
+    )
+
+    if transactions.empty:
+
+        st.warning(
+            "No transaction data available."
+        )
+
+    else:
+
+        sender_col = find_column(
+            transactions,
+            [
+                "sender",
+                "sender_id",
+                "source",
+                "from"
+            ]
+        )
+
+        receiver_col = find_column(
+            transactions,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to"
+            ]
+        )
+
+        if sender_col and receiver_col:
+
+            repeated_financial = (
+                transactions
+                .groupby(
+                    [
+                        sender_col,
+                        receiver_col
+                    ]
+                )
+                .size()
+                .reset_index(
+                    name="Transaction Count"
+                )
+            )
+
+            repeated_financial = (
+                repeated_financial[
+                    repeated_financial[
+                        "Transaction Count"
+                    ] >= 2
+                ]
+            )
+
+            if not repeated_financial.empty:
+
+                total_alerts += len(
+                    repeated_financial
+                )
+
+                st.warning(
+                    f"🚨 {len(repeated_financial)} "
+                    "repeated financial relationship(s) detected."
+                )
+
+                st.dataframe(
+                    repeated_financial.sort_values(
+                        "Transaction Count",
+                        ascending=False
+                    ),
+                    width="stretch",
+                    hide_index=True
+                )
+
+            else:
+
+                st.success(
+                    "No repeated financial relationships detected."
+                )
+
+        else:
+
+            st.error(
+                "Sender/Receiver columns not found."
+            )
+
+    # ========================================================
+    # 5. COMMUNICATION + FINANCIAL
+    # ========================================================
+
+    st.markdown(
+        "### 📞💰 5. Communication + Financial Relationship"
+    )
+
+    st.caption(
+        "Finds pairs of entities that both communicate "
+        "and have financial interactions."
+    )
+
+    communication_pairs = set()
+    financial_pairs = set()
+
+    # ========================================================
+    # COMMUNICATION PAIRS
+    # ========================================================
+
+    if not calls.empty:
+
+        caller_col = find_column(
+            calls,
+            [
+                "caller",
+                "caller_id",
+                "source",
+                "from"
+            ]
+        )
+
+        receiver_col = find_column(
+            calls,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to"
+            ]
+        )
+
+        if caller_col and receiver_col:
+
+            for _, row in calls.iterrows():
+
+                a = str(
+                    row[caller_col]
+                ).strip()
+
+                b = str(
+                    row[receiver_col]
+                ).strip()
+
+                if a and b and a != b:
+
+                    communication_pairs.add(
+                        tuple(
+                            sorted(
+                                [a, b]
+                            )
+                        )
+                    )
+
+    # ========================================================
+    # FINANCIAL PAIRS
+    # ========================================================
+
+    if not transactions.empty:
+
+        sender_col = find_column(
+            transactions,
+            [
+                "sender",
+                "sender_id",
+                "source",
+                "from"
+            ]
+        )
+
+        receiver_col = find_column(
+            transactions,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to"
+            ]
+        )
+
+        if sender_col and receiver_col:
+
+            for _, row in transactions.iterrows():
+
+                a = str(
+                    row[sender_col]
+                ).strip()
+
+                b = str(
+                    row[receiver_col]
+                ).strip()
+
+                if a and b and a != b:
+
+                    financial_pairs.add(
+                        tuple(
+                            sorted(
+                                [a, b]
+                            )
+                        )
+                    )
+
+    # ========================================================
+    # COMBINED PAIRS
+    # ========================================================
+
+    combined_pairs = (
+        communication_pairs
+        & financial_pairs
+    )
+
+    if combined_pairs:
+
+        total_alerts += len(
+            combined_pairs
+        )
+
+        combined_data = []
+
+        for a, b in sorted(
+            combined_pairs
+        ):
+
+            combined_data.append(
+                {
+                    "Person 1": a,
+                    "Person 2": b,
+                    "Communication": "Yes",
+                    "Financial Relationship": "Yes"
+                }
+            )
+
+        combined_df = pd.DataFrame(
+            combined_data
+        )
+
+        st.warning(
+            f"🚨 {len(combined_df)} entity pair(s) "
+            "show both communication and financial relationships."
+        )
+
+        st.dataframe(
+            combined_df,
+            width="stretch",
+            hide_index=True
+        )
+
+    else:
+
+        st.info(
+            "No communication + financial relationships detected."
+        )
+
+    # ========================================================
+    # 6. REPEATED NETWORK CONNECTIONS
+    # ========================================================
+
+    st.markdown(
+        "### 🔗 6. Repeated Network Connections"
+    )
+
+    st.caption(
+        "Detects people connected repeatedly through "
+        "calls, transactions, phones, vehicles or locations."
+    )
+
+    network_connections = {}
+
+    def record_network_connection(
+        a,
+        b,
+        relationship
+    ):
+
+        if not a or not b:
+            return
+
+        a = str(a).strip()
+        b = str(b).strip()
+
+        if not a or not b or a == b:
+            return
+
+        pair = tuple(
+            sorted(
+                [a, b]
+            )
+        )
+
+        if pair not in network_connections:
+
+            network_connections[pair] = {
+                "Person 1": pair[0],
+                "Person 2": pair[1],
+                "Calls": 0,
+                "Transactions": 0,
+                "Shared Phones": 0,
+                "Shared Vehicles": 0,
+                "Shared Locations": 0
+            }
+
+        network_connections[
+            pair
+        ][relationship] += 1
+
+    # ========================================================
+    # CALLS
+    # ========================================================
+
+    if not calls.empty:
+
+        caller_col = find_column(
+            calls,
+            [
+                "caller",
+                "caller_id",
+                "source",
+                "from"
+            ]
+        )
+
+        receiver_col = find_column(
+            calls,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to"
+            ]
+        )
+
+        if caller_col and receiver_col:
+
+            for _, row in calls.iterrows():
+
+                record_network_connection(
+                    row[caller_col],
+                    row[receiver_col],
+                    "Calls"
+                )
+
+    # ========================================================
+    # TRANSACTIONS
+    # ========================================================
+
+    if not transactions.empty:
+
+        sender_col = find_column(
+            transactions,
+            [
+                "sender",
+                "sender_id",
+                "source",
+                "from"
+            ]
+        )
+
+        receiver_col = find_column(
+            transactions,
+            [
+                "receiver",
+                "receiver_id",
+                "target",
+                "to"
+            ]
+        )
+
+        if sender_col and receiver_col:
+
+            for _, row in transactions.iterrows():
+
+                record_network_connection(
+                    row[sender_col],
+                    row[receiver_col],
+                    "Transactions"
+                )
+
+    # ========================================================
+    # SHARED PHONES
+    # ========================================================
+
+    if not phones.empty:
+
+        phone_person = find_column(
+            phones,
+            [
+                "person_id",
+                "owner_id"
+            ]
+        )
+
+        phone_number = find_column(
+            phones,
+            [
+                "phone_number",
+                "phone",
+                "number",
+                "mobile"
+            ]
+        )
+
+        if phone_person and phone_number:
+
+            for _, group in phones.groupby(
+                phone_number
+            ):
+
+                people = list(
+                    dict.fromkeys(
+                        str(x).strip()
+                        for x in group[phone_person]
+                        if str(x).strip()
+                    )
+                )
+
+                for a, b in combinations(
+                    people,
+                    2
+                ):
+
+                    record_network_connection(
+                        a,
+                        b,
+                        "Shared Phones"
+                    )
+
+    # ========================================================
+    # SHARED VEHICLES
+    # ========================================================
+
+    if not vehicles.empty:
+
+        vehicle_person = find_column(
+            vehicles,
+            [
+                "owner_id",
+                "person_id"
+            ]
+        )
+
+        vehicle_id = find_column(
+            vehicles,
+            [
+                "vehicle_id",
+                "vehicle"
+            ]
+        )
+
+        if vehicle_person and vehicle_id:
+
+            for _, group in vehicles.groupby(
+                vehicle_id
+            ):
+
+                people = list(
+                    dict.fromkeys(
+                        str(x).strip()
+                        for x in group[vehicle_person]
+                        if str(x).strip()
+                    )
+                )
+
+                for a, b in combinations(
+                    people,
+                    2
+                ):
+
+                    record_network_connection(
+                        a,
+                        b,
+                        "Shared Vehicles"
+                    )
+
+    # ========================================================
+    # SHARED LOCATIONS
+    # ========================================================
+
+    if not locations.empty:
+
+        location_person = find_column(
+            locations,
+            [
+                "person_id",
+                "owner_id",
+                "resident_id"
+            ]
+        )
+
+        location_id = find_column(
+            locations,
+            [
+                "location_id",
+                "location"
+            ]
+        )
+
+        if location_person and location_id:
+
+            for _, group in locations.groupby(
+                location_id
+            ):
+
+                people = list(
+                    dict.fromkeys(
+                        str(x).strip()
+                        for x in group[location_person]
+                        if str(x).strip()
+                    )
+                )
+
+                for a, b in combinations(
+                    people,
+                    2
+                ):
+
+                    record_network_connection(
+                        a,
+                        b,
+                        "Shared Locations"
+                    )
+
+    # ========================================================
+    # DISPLAY REPEATED NETWORK CONNECTIONS
+    # ========================================================
+
+    if network_connections:
+
+        repeated_network = []
+
+        for pair, data in network_connections.items():
+
+            total_connections = (
+                data["Calls"]
+                + data["Transactions"]
+                + data["Shared Phones"]
+                + data["Shared Vehicles"]
+                + data["Shared Locations"]
+            )
+
+            connection_types = sum(
+                1
+                for key in [
+                    "Calls",
+                    "Transactions",
+                    "Shared Phones",
+                    "Shared Vehicles",
+                    "Shared Locations"
+                ]
+                if data[key] > 0
+            )
+
+            if (
+                total_connections >= 2
+                or connection_types >= 2
+            ):
+
+                result = data.copy()
+
+                result["Total Connections"] = (
+                    total_connections
+                )
+
+                result["Connection Types"] = (
+                    connection_types
+                )
+
+                repeated_network.append(
+                    result
+                )
+
+        if repeated_network:
+
+            repeated_network_df = pd.DataFrame(
+                repeated_network
+            )
+
+            repeated_network_df = (
+                repeated_network_df.sort_values(
+                    "Total Connections",
+                    ascending=False
+                )
+            )
+
+            total_alerts += len(
+                repeated_network_df
+            )
+
+            st.warning(
+                f"🚨 {len(repeated_network_df)} repeated "
+                "network connection(s) detected."
+            )
+
+            st.dataframe(
+                repeated_network_df,
+                width="stretch",
                 hide_index=True
             )
 
         else:
 
             st.success(
-                "No unusually highly connected entities detected."
+                "No repeated network connections detected."
             )
-
-
-st.divider()
-
-
-# ============================================================
-# ALERT 4
-# MULTIPLE TRANSACTIONS BETWEEN SAME ENTITIES
-# ============================================================
-
-st.subheader(
-    "🔄 4. Repeated Financial Relationships"
-)
-
-st.write(
-    """
-    Detects repeated money transfers between the same sender
-    and receiver.
-    """
-)
-
-
-if len(transactions) > 0:
-
-    transaction_relationships = (
-        transactions
-        .groupby(
-            [
-                "Sender",
-                "Receiver"
-            ]
-        )
-        .agg(
-            Transaction_Count=(
-                "Amount",
-                "count"
-            ),
-
-            Total_Amount=(
-                "Amount",
-                "sum"
-            ),
-
-            Average_Amount=(
-                "Amount",
-                "mean"
-            )
-        )
-        .reset_index()
-    )
-
-
-    repeated_transactions = (
-        transaction_relationships[
-            transaction_relationships[
-                "Transaction_Count"
-            ] >= 3
-        ]
-        .sort_values(
-            by="Transaction_Count",
-            ascending=False
-        )
-    )
-
-
-    rapid_transaction_alerts = len(
-        repeated_transactions
-    )
-
-
-    if rapid_transaction_alerts > 0:
-
-        st.warning(
-            f"{rapid_transaction_alerts} repeated financial "
-            "relationship(s) detected."
-        )
-
-        st.dataframe(
-            repeated_transactions,
-            use_container_width=True,
-            hide_index=True
-        )
-
-    else:
-
-        st.success(
-            "No repeated financial relationships detected."
-        )
-
-
-st.divider()
-
-
-# ============================================================
-# ALERT 5
-# COMMUNICATION + TRANSACTION CONNECTION
-# ============================================================
-
-st.subheader(
-    "📞💰 5. Communication + Financial Relationship"
-)
-
-st.write(
-    """
-    Finds pairs of entities that both communicate with each
-    other and have financial interactions.
-    """)
-
-
-communication_pairs = set()
-
-
-for _, row in calls.iterrows():
-
-    a = str(
-        row["Caller"]
-    )
-
-    b = str(
-        row["Receiver"]
-    )
-
-    communication_pairs.add(
-        tuple(
-            sorted(
-                [a, b]
-            )
-        )
-    )
-
-
-transaction_pairs = set()
-
-
-for _, row in transactions.iterrows():
-
-    a = str(
-        row["Sender"]
-    )
-
-    b = str(
-        row["Receiver"]
-    )
-
-    transaction_pairs.add(
-        tuple(
-            sorted(
-                [a, b]
-            )
-        )
-    )
-
-
-overlapping_pairs = (
-    communication_pairs
-    &
-    transaction_pairs
-)
-
-
-combined_relationships = []
-
-
-for pair in overlapping_pairs:
-
-    a, b = pair
-
-    call_count = len(
-        calls[
-            (
-                (
-                    calls["Caller"].astype(str)
-                    == a
-                )
-                &
-                (
-                    calls["Receiver"].astype(str)
-                    == b
-                )
-            )
-            |
-            (
-                (
-                    calls["Caller"].astype(str)
-                    == b
-                )
-                &
-                (
-                    calls["Receiver"].astype(str)
-                    == a
-                )
-            )
-        ]
-    )
-
-
-    pair_transactions = transactions[
-        (
-            (
-                transactions["Sender"].astype(str)
-                == a
-            )
-            &
-            (
-                transactions["Receiver"].astype(str)
-                == b
-            )
-        )
-        |
-        (
-            (
-                transactions["Sender"].astype(str)
-                == b
-            )
-            &
-            (
-                transactions["Receiver"].astype(str)
-                == a
-            )
-        )
-    ]
-
-
-    total_amount = pd.to_numeric(
-        pair_transactions["Amount"],
-        errors="coerce"
-    ).fillna(0).sum()
-
-
-    combined_relationships.append(
-        {
-            "Entity A": a,
-
-            "Entity B": b,
-
-            "Calls": call_count,
-
-            "Transactions": len(
-                pair_transactions
-            ),
-
-            "Total Transaction Value":
-                total_amount
-        }
-    )
-
-
-combined_df = pd.DataFrame(
-    combined_relationships
-)
-
-
-if len(combined_df) > 0:
-
-    combined_df = combined_df.sort_values(
-        by="Total Transaction Value",
-        ascending=False
-    )
-
-    st.warning(
-        f"{len(combined_df)} entity pair(s) show both "
-        "communication and financial relationships."
-    )
-
-    st.dataframe(
-        combined_df,
-        use_container_width=True,
-        hide_index=True
-    )
-
-else:
-
-    st.success(
-        "No overlapping communication and transaction "
-        "relationships detected."
-    )
-
-
-st.divider()
-
-
-# ============================================================
-# OVERALL ALERT SUMMARY
-# ============================================================
-
-total_alerts = (
-    repeated_call_alerts
-    +
-    financial_alerts
-    +
-    high_connection_alerts
-    +
-    rapid_transaction_alerts
-)
-
-
-st.subheader(
-    "📋 Alert Summary"
-)
-
-
-col1, col2, col3, col4, col5 = st.columns(5)
-
-
-with col1:
-
-    st.metric(
-        "🚨 Total",
-        total_alerts
-    )
-
-
-with col2:
-
-    st.metric(
-        "📞 Communication",
-        repeated_call_alerts
-    )
-
-
-with col3:
-
-    st.metric(
-        "💰 Financial",
-        financial_alerts
-    )
-
-
-with col4:
-
-    st.metric(
-        "🕸️ Network",
-        high_connection_alerts
-    )
-
-
-with col5:
-
-    st.metric(
-        "🔄 Repeated Transfers",
-        rapid_transaction_alerts
-    )
-
-
-st.divider()
-
-
-# ============================================================
-# ALERT SEVERITY
-# ============================================================
-
-st.subheader(
-    "⚠️ Alert Severity"
-)
-
-
-if total_alerts == 0:
-
-    st.success(
-        "No automated alerts were generated."
-    )
-
-elif total_alerts <= 3:
-
-    st.info(
-        "Low number of indicators detected. "
-        "Review individual records."
-    )
-
-elif total_alerts <= 10:
-
-    st.warning(
-        "Multiple indicators detected. "
-        "Prioritized human review is recommended."
-    )
-
-else:
-
-    st.error(
-        "A large number of indicators were detected. "
-        "Detailed investigation and verification are recommended."
-    )
-
-
-# ============================================================
-# INVESTIGATOR FILTER
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "🔎 Investigate Entity"
-)
-
-
-person_ids = persons[
-    "Person_ID"
-].astype(str).tolist()
-
-
-if len(person_ids) > 0:
-
-    selected_person = st.selectbox(
-        "Select an entity",
-        person_ids
-    )
-
-
-    selected_person_data = persons[
-        persons["Person_ID"].astype(str)
-        ==
-        selected_person
-    ]
-
-
-    st.write(
-        "### Entity Information"
-    )
-
-
-    st.dataframe(
-        selected_person_data,
-        use_container_width=True,
-        hide_index=True
-    )
-
-
-    # --------------------------------------------------------
-    # PERSON CALLS
-    # --------------------------------------------------------
-
-    person_calls = calls[
-        (
-            calls["Caller"].astype(str)
-            ==
-            selected_person
-        )
-        |
-        (
-            calls["Receiver"].astype(str)
-            ==
-            selected_person
-        )
-    ]
-
-
-    st.write(
-        "### 📞 Communication Records"
-    )
-
-
-    if len(person_calls) > 0:
-
-        st.dataframe(
-            person_calls,
-            use_container_width=True,
-            hide_index=True
-        )
 
     else:
 
         st.info(
-            "No communication records found."
+            "No network relationships available."
         )
 
+    # ========================================================
+    # ALERT SUMMARY
+    # ========================================================
 
-    # --------------------------------------------------------
-    # PERSON TRANSACTIONS
-    # --------------------------------------------------------
+    st.markdown("---")
 
-    person_transactions = transactions[
-        (
-            transactions["Sender"].astype(str)
-            ==
-            selected_person
+    st.markdown(
+        "### 📊 Alert Summary"
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.metric(
+            "Total Alert Indicators",
+            total_alerts
         )
-        |
-        (
-            transactions["Receiver"].astype(str)
-            ==
-            selected_person
+
+    with col2:
+
+        st.metric(
+            "Data Records",
+            (
+                len(persons)
+                + len(calls)
+                + len(transactions)
+                + len(cases)
+            )
         )
-    ]
 
-
-    st.write(
-        "### 💰 Financial Records"
+    st.caption(
+        "These indicators are intended to support investigation "
+        "and should be reviewed by authorized personnel."
     )
 
 
-    if len(person_transactions) > 0:
-
-        st.dataframe(
-            person_transactions,
-            use_container_width=True,
-            hide_index=True
-        )
-
-    else:
-
-        st.info(
-            "No financial records found."
-        )
-
-
 # ============================================================
-# FOOTER
+# DIRECT STREAMLIT EXECUTION
 # ============================================================
 
-st.divider()
-
-st.caption(
-    "CrimeGraph AI | SIH 26189 Prototype"
-)
-
-st.caption(
-    "Automated alerts are investigative indicators only. "
-    "Human verification is required."
-)
+if __name__ == "__main__":
+    show()
